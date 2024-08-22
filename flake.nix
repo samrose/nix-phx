@@ -32,7 +32,7 @@
           MIX_ENV = "prod";
           mixFodDeps = packages.fetchMixDeps {
             inherit version src pname;
-            sha256 = pkgs.lib.fakeSha256;
+            sha256 = "sha256-7VqkdolqEjF9a0A/S4dyyB7y7fYBuEVIpNICWHFfj+Y=";
             buildInputs = [];
             propagatedBuildInputs = [];
           };
