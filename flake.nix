@@ -24,7 +24,7 @@
 
         # Phoenix release build
         phoenixRelease = let
-          packages = pkgs.beam.packagesWith pkgs.beam.interpreters.erlang_25;
+          packages = pkgs.beam.packagesWith pkgs.beam.interpreters.erlang_25 pkgs.elixir_1_17;
         in packages.mixRelease rec {
           pname = appName;
           version = "0.0.0";
@@ -44,7 +44,7 @@
             alejandra
             bat
             erlang_25
-            elixir_1_16
+            elixir_1_17
             docker-compose
             entr
             gnumake
