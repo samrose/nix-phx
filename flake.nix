@@ -18,30 +18,106 @@
     flake-utils.lib.eachSystem systems (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        
+
         # Phoenix application name (change this to match your app name)
         appName = "phxapp";
 
-        # Phoenix release build
-        phoenixRelease = let
-          packages = pkgs.beam.packagesWith pkgs.beam.interpreters.erlang_25 pkgs.elixir_1_17;
-        in packages.mixRelease rec {
-          pname = appName;
-          version = "0.0.0";
-          src = ./.;
-          MIX_ENV = "prod";
-          mixFodDeps = packages.fetchMixDeps {
-            inherit version src pname;
-            sha256 = "sha256-7VqkdolqEjF9a0A/S4dyyB7y7fYBuEVIpNICWHFfj+Y=";
-            buildInputs = [];
-            propagatedBuildInputs = [];
+        # Phoenix release build configuration remains the same...
+        phoenixRelease =
+          let
+            packages = pkgs.beam.packagesWith pkgs.beam.interpreters.erlang_25 pkgs.elixir_1_17;
+          in
+          packages.mixRelease rec {
+            pname = appName;
+            version = "0.0.0";
+            src = ./.;
+            MIX_ENV = "prod";
+            mixFodDeps = packages.fetchMixDeps {
+              inherit version src pname;
+              sha256 = "sha256-7VqkdolqEjF9a0A/S4dyyB7y7fYBuEVIpNICWHFfj+Y=";
+              buildInputs = [ ];
+              propagatedBuildInputs = [ ];
+            };
           };
-        };
 
-        # Development shell
-        devShell = let
-          basePackages = with pkgs; [
-            alejandra
+        devShellScript = pkgs.writeText "devshell.nu" ''
+          # Create .nushell directory if it doesn't exist
+          mkdir .nushell
+  
+          # Environment setup
+          mkdir .nix-mix .nix-hex
+          $env.MIX_HOME = ($env.PWD | path join ".nix-mix")
+          $env.HEX_HOME = ($env.PWD | path join ".nix-hex")
+  
+          # Properly construct PATH using nushell list operations
+          let mix_bin = ($env.MIX_HOME | path join "bin")
+          let hex_bin = ($env.HEX_HOME | path join "bin")
+          $env.PATH = ([$mix_bin $hex_bin] | append ($env.PATH | split row (char esep)) | uniq | str join (char esep))
+  
+          $env.LANG = "en_US.UTF-8"
+          $env.LC_ALL = "en_US.UTF-8"
+          $env.ERL_AFLAGS = "-kernel shell_history enabled"
+          $env.PGDATA = ($env.PWD | path join "postgres_data")
+          $env.PGHOST = ($env.PWD | path join "postgres")
+          $env.LOG_PATH = ($env.PGHOST | path join "LOG")
+
+          $env.PGUSER = "postgres"
+          $env.PGPASSWORD = "postgres"
+          $env.PGDATABASE = "postgres"
+          $env.PGPORT = "5432"
+          $env.DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
+
+          # Create postgres directory if it doesn't exist
+          if not ($env.PGHOST | path exists) {
+            mkdir $env.PGHOST
+          }
+
+          # PostgreSQL initialization
+          if not ($env.PGDATA | path exists) {
+            print 'Initializing postgresql database...'
+            if $env.OS == "macos" {
+              initdb --auth=trust -U postgres $env.PGDATA --encoding=UTF8 --locale=en_US.UTF-8
+            } else {
+              initdb $env.PGDATA --username postgres -A trust --encoding=UTF8 --locale=en_US.UTF-8
+            }
+    
+            # Configure PostgreSQL
+            $"listen_addresses='*'" | save --append $env.PGDATA/postgresql.conf
+            $"unix_socket_directories='($env.PWD)/postgres'" | save --append $env.PGDATA/postgresql.conf
+            "unix_socket_permissions=0700" | save --append $env.PGDATA/postgresql.conf
+            "port = 5432" | save --append $env.PGDATA/postgresql.conf
+          }
+
+          # Print helpful information
+          print "To run the services configured here, you can run the `overmind start -D` command"
+          print $"To connect to PostgreSQL, use: psql -h ($env.PGHOST) -p ($env.PGPORT) -U ($env.PGUSER) -d ($env.PGDATABASE)"
+        '';
+        # Basic env.nu config
+        nuEnvConfig = pkgs.writeText "env.nu" ''
+          # Ensure we use project config
+          $env.NUSHELL_CONFIG_DIR = ($env.PWD | path join ".nushell")
+          $env.config = {
+            show_banner: false
+            edit_mode: emacs
+            shell_integration: true
+            use_ansi_coloring: true
+          }
+        '';
+
+        # Basic config.nu
+        nuConfig = pkgs.writeText "config.nu" ''
+          # Basic configuration
+          $env.config = {
+            show_banner: false
+            edit_mode: emacs
+            shell_integration: true
+            use_ansi_coloring: true
+          }
+        '';
+
+        devShell = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            nixpkgs-fmt
             bat
             erlang_25
             elixir_1_17
@@ -51,11 +127,12 @@
             overmind
             jq
             mix2nix
-            (postgresql_16.withPackages (p: [p.postgis]))
+            (postgresql_16.withPackages (p: [ p.postgis ]))
             graphviz
             imagemagick
             python3
             glibcLocales
+            nushell
           ] ++ lib.optionals stdenv.isLinux [
             inotify-tools
             unixtools.netstat
@@ -65,67 +142,22 @@
             darwin.apple_sdk.frameworks.CoreServices
           ];
 
-          postgresInitScript = if pkgs.stdenv.isDarwin then ''
-            if [ ! -d $PGDATA ]; then
-              echo 'Initializing postgresql database...'
-              initdb --auth=trust -U postgres $PGDATA --encoding=UTF8 --locale=en_US.UTF-8
-              echo "listen_addresses='*'" >> $PGDATA/postgresql.conf
-              echo "unix_socket_directories='$PWD/postgres'" >> $PGDATA/postgresql.conf
-              echo "unix_socket_permissions=0700" >> $PGDATA/postgresql.conf
-              echo "port = 5432" >> $PGDATA/postgresql.conf
-            fi
-          '' else ''
-            if [ ! -d $PGDATA ]; then
-              echo 'Initializing postgresql database...'
-              initdb $PGDATA --username postgres -A trust --encoding=UTF8 --locale=en_US.UTF-8
-              echo "listen_addresses='*'" >> $PGDATA/postgresql.conf
-              echo "unix_socket_directories='$PWD/postgres'" >> $PGDATA/postgresql.conf
-              echo "unix_socket_permissions=0700" >> $PGDATA/postgresql.conf
-              echo "port = 5432" >> $PGDATA/postgresql.conf
-            fi
+          shellHook = ''
+            # Copy config files
+            mkdir -p "$PWD/.nushell"
+            cp ${nuEnvConfig} "$PWD/.nushell/env.nu"
+            cp ${nuConfig} "$PWD/.nushell/config.nu"
+            
+            # Start nushell with our custom config
+            NUSHELL_CONFIG_DIR="$PWD/.nushell" ${pkgs.nushell}/bin/nu ${devShellScript}
+            exec env NUSHELL_CONFIG_DIR="$PWD/.nushell" ${pkgs.nushell}/bin/nu
           '';
 
-          hooks = ''
-            # Check if .env file exists before sourcing
-            # if [ -f .env ]; then
-            #   source .env
-            # else
-            #   echo ".env file not found. Skipping..."
-            # fi
-            mkdir -p .nix-mix .nix-hex
-            export MIX_HOME=$PWD/.nix-mix
-            export HEX_HOME=$PWD/.nix-mix
-            export PATH=$MIX_HOME/bin:$HEX_HOME/bin:$PATH
-            export LANG=en_US.UTF-8
-            export LC_ALL=en_US.UTF-8
-            export ERL_AFLAGS="-kernel shell_history enabled"
-            export PGDATA=$PWD/postgres_data
-            export PGHOST=$PWD/postgres
-            export LOG_PATH=$PWD/postgres/LOG
-
-            export PGUSER=postgres
-            export PGPASSWORD=postgres
-            export PGDATABASE=postgres
-            export PGPORT=5432
-            export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
-            if [ ! -d $PWD/postgres ]; then
-              mkdir -p $PWD/postgres
-            fi
-            export DATABASE_URL="postgresql:///postgres?host=$PGHOST&port=5434"
-            if [ ! -d $PWD/postgres ]; then
-              mkdir -p $PWD/postgres
-            fi
-            ${postgresInitScript}
-            echo 'To run the services configured here, you can run the `overmind start -D` command'
-            echo 'To connect to PostgreSQL, use: psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE'
-          '';
-        in pkgs.mkShell {
-          buildInputs = basePackages;
-          shellHook = hooks;
           LOCALE_ARCHIVE = if pkgs.stdenv.isLinux then "${pkgs.glibcLocales}/lib/locale/locale-archive" else "";
         };
 
-      in {
+      in
+      {
         packages.default = phoenixRelease;
 
         devShells.default = devShell;
@@ -176,7 +208,7 @@
                 isSystemUser = true;
                 group = cfg.group;
               };
-              users.groups.${cfg.group} = {};
+              users.groups.${cfg.group} = { };
 
               # PostgreSQL configuration
               services.postgresql = {
