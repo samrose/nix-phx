@@ -40,3 +40,4 @@ npm-debug.log
 postgres_data
 postgres
 result
+.nushell
